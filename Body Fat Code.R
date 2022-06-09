@@ -1,0 +1,128 @@
+---
+  title: "Body Fat"
+author: "Jeremy Larcher"
+date: '2022-06-09'
+output: html_document
+---
+  
+  ```{r Loading Packages}
+library(tidyverse)
+library(tidymodels)
+library(corrr)
+library(dplyr)
+library(rsample)
+library(recipes)
+library(parsnip)
+library(broom)
+library(psych)
+library(corrr)
+library(ranger)
+library(skimr)
+```
+
+```{r EDA}
+
+skim(Fat)
+
+high_corr_variables <- Fat %>% 
+  correlate() %>% 
+  corrr::focus(BodyFat) %>% 
+  arrange(desc(BodyFat)) %>% 
+  filter(BodyFat > 0.5) %>% 
+  pull(term)
+
+data <- Fat %>% 
+  select(high_corr_variables, BodyFat)
+
+data %>% 
+  corrr::correlate() %>% 
+  corrr::network_plot()
+
+```
+
+```{r Splitting Data}
+set.seed(11223344)
+
+data_split <- initial_split(data)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+```
+
+```{r Building LM Model}
+lm_spec <- linear_reg() %>% 
+  set_engine(engine = "lm")
+
+lm_fit <-lm_spec %>% 
+  fit(BodyFat ~., data= data_train)
+```
+
+```{r Building RF Model}
+rf_spec <- rand_forest(mode = "regression") %>% 
+  set_engine("ranger")
+
+rf_fit <- rf_spec %>% 
+  fit(BodyFat ~., data= data_train)
+```
+
+```{r Evaluating Models}
+results_train <- lm_fit %>% 
+  predict(new_data = data_train) %>% 
+  mutate(truth = data_train$BodyFat,
+         model = "lm") %>% 
+  bind_rows(rf_fit %>% 
+              predict(new_data = data_train) %>% 
+              mutate(truth = data_train$BodyFat,
+                     model = "rf"))
+
+results_test <- lm_fit %>% 
+  predict(new_data = data_test) %>% 
+  mutate(truth = data_test$BodyFat,
+         model = "lm") %>% 
+  bind_rows(rf_fit %>% 
+              predict(new_data = data_test) %>% 
+              mutate(truth = data_test$BodyFat,
+                     model = "rf"))
+```
+
+```{r RMSEs}
+
+results_train %>% 
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred) %>% 
+  mutate(std.rmse = (.estimate/(max(results_train$truth)-min(results_train$truth))))
+
+results_test %>% 
+  group_by(model) %>% 
+  rmse(truth = truth, estimate = .pred) %>% 
+  mutate(std.rmse = (.estimate/(max(results_test$truth)-min(results_test$truth))))
+
+```
+
+```{r Plotting}
+
+results_test %>% 
+  mutate(train = "testing") %>% 
+  bind_rows(results_train %>% 
+              mutate(train = "training")) %>% 
+  ggplot(aes(truth, .pred, color = model))+
+  geom_abline(lty = 2, color = "gray", size = 1.5)+
+  geom_point(alpha = 0.5)+
+  facet_wrap(~train)
+
+```
+
+```{r Resampling Training Data}
+set.seed(11223344)
+bf_folds <- vfold_cv(data_train)
+
+rf_res <- fit_resamples(
+  rf_spec,
+  BodyFat ~ .,
+  bf_folds,
+  control = control_resamples(save_pred = TRUE)
+)
+
+rf_res %>% 
+  collect_metrics()
+```
+
