@@ -1,0 +1,223 @@
+---
+title: "Body Fat"
+author: "Jeremy Larcher"
+date: '2022-06-09'
+output: html_document
+---
+
+```{r Loading Packages}
+library(tidyverse)
+library(tidymodels)
+library(corrr)
+library(dplyr)
+library(rsample)
+library(recipes)
+library(parsnip)
+library(broom)
+library(psych)
+library(corrr)
+library(ranger)
+library(skimr)
+library(DescTools)
+library(patchwork)
+
+```
+
+```{r EDA & Cleaning}
+
+skim(Fat)
+
+pairs.panels(Fat[,c('Density', 'BodyFat', 'Age','Weight','Height','Neck','Chest')]) 
+pairs.panels(Fat[,c('BodyFat','Abdomen','Hip','Thigh','Knee','Ankle','Biceps','Forearm','Wrist')]) ## all variables seen to have some degree of outliers
+
+Fat.clean <- Fat
+
+Weight_win <-  Winsorize(Fat.clean$Weight, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Weight <- Weight_win
+
+Neck_win <-  Winsorize(Fat.clean$Neck, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Neck <- Neck_win
+Height_win <-  Winsorize(Fat.clean$Height, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Height <- Height_win 
+
+Chest_win <-  Winsorize(Fat.clean$Chest, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Chest <- Chest_win 
+
+Abdomen_win <-  Winsorize(Fat.clean$Abdomen, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Abdomen <- Abdomen_win 
+Hip_win <-  Winsorize(Fat.clean$Hip, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Hip <- Hip_win 
+
+Thigh_win <-  Winsorize(Fat.clean$Thigh, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Thigh <- Thigh_win 
+
+Knee_win <-  Winsorize(Fat.clean$Knee, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Knee <- Knee_win
+
+Ankle_win <-  Winsorize(Fat.clean$Ankle, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Ankle <- Ankle_win
+
+Biceps_win <-  Winsorize(Fat.clean$Biceps, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Biceps <- Biceps_win 
+
+Forearm_win <-  Winsorize(Fat.clean$Forearm, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Forearm <- Forearm_win 
+
+Wrist_win <-  Winsorize(Fat.clean$Wrist, minval = NULL, maxval = NULL, probs = c(0.04,0.96), na.rm = FALSE, type =1)
+Fat.clean$Wrist <- Wrist_win
+
+
+
+pairs.panels(Fat.clean[,c('Density', 'BodyFat', 'Age','Weight','Height','Neck','Chest')]) 
+pairs.panels(Fat.clean[,c('BodyFat','Abdomen','Hip','Thigh','Knee','Ankle','Biceps','Forearm','Wrist')]) ## all variables seen to have some degree of outliers
+
+
+Fat.clean %>% 
+  corrr::correlate() %>% 
+  corrr::network_plot()
+
+Fat %>% 
+  corrr::correlate() %>% 
+  corrr::network_plot()
+
+high_corr_variables <- Fat %>% 
+  correlate() %>% 
+  corrr::focus(BodyFat) %>% 
+  arrange(desc(BodyFat)) %>% 
+  filter(BodyFat > 0.5) %>% 
+  pull(term)
+
+data <- Fat.clean %>% 
+  select(., -Density, BodyFat)
+
+
+```
+
+```{r Splitting Data}
+
+data_split <- initial_split(data)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+data_train
+```
+
+```{r Recipe}
+bf_recipe <- 
+  recipe(
+    BodyFat ~ .,
+    data = data_train
+  ) %>%
+  step_normalize(all_numeric())
+bf_recipe
+
+## To see the pre-process steps applied to the data you need to prep() the recipe and then bake() it
+bf_recipe %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  head()
+
+# now look at the pre-processing on the testing set
+bf_recipe %>% 
+  prep() %>% 
+  bake(new_data = data_test) %>% 
+  head()
+```
+
+```{r Linear Model}
+lm_model <- linear_reg() %>% 
+  set_engine("lm") %>%
+  set_mode("regression")
+lm_model
+```
+
+```{r RF Model}
+rf_model <- rand_forest(mode = "regression") %>% 
+  set_engine("ranger")
+
+```
+
+```{r Workflow}
+bf_workflow <-
+  workflow() %>%
+  add_model(lm_model) %>%
+  add_recipe(bf_recipe) 
+bf_workflow
+```
+
+```{r Workflow 2}
+bf_workflow2 <-
+  workflow() %>%
+  add_model(rf_model) %>%
+  add_recipe(bf_recipe) 
+bf_workflow
+```
+
+
+```{r Cross Validation lm}
+set.seed(136)
+cv_folds <- vfold_cv(data_train, v = 10) 
+cv_folds
+
+model_fit <- bf_workflow %>% 
+  fit_resamples(
+    resamples = cv_folds,
+    metrics = metric_set(rmse, rsq, mae))
+
+model_fit %>% 
+  collect_metrics() %>% 
+  arrange(.metric)
+```
+
+```{r Cross Validation rf}
+set.seed(136)
+cv_folds <- vfold_cv(data_train, v = 10) 
+cv_folds
+
+model_fit <- bf_workflow2 %>% 
+  fit_resamples(
+    resamples = cv_folds,
+    metrics = metric_set(rmse, rsq, mae))
+
+model_fit %>% 
+  collect_metrics() %>% 
+  arrange(.metric)
+```
+
+
+```{r Fitting Folds lm}
+fit_lm <- last_fit(
+  bf_workflow, 
+  split = data_split,
+  metrics = metric_set(rmse, rsq, mae))
+
+fit_lm %>% 
+  collect_metrics()%>% 
+  arrange(.metric)
+```
+
+```{r Fitting Folds rf}
+fit_rm <- last_fit(
+  bf_workflow2, 
+  split = data_split,
+  metrics = metric_set(rmse, rsq, mae))
+
+fit_rm %>% 
+  collect_metrics()%>% 
+  arrange(.metric)
+```
+
+```{r Plotting Models}
+fit_lm %>% 
+  unnest(.predictions) %>% 
+  ggplot(aes(BodyFat, .pred, color = id))+
+  geom_abline(lty = 2, color = "gray", size = 1.5)+
+  geom_point(alpha = 0.5)
+
+fit_rm %>% 
+  unnest(.predictions) %>% 
+  ggplot(aes(BodyFat, .pred, color = id))+
+  geom_abline(lty = 2, color = "gray", size = 1.5)+
+  geom_point(alpha = 0.5)
+```
+
